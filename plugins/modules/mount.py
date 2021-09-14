@@ -483,8 +483,9 @@ def mount(module, args):
     else:
         if module.params['state'] != 'ephemeral':
             cmd += _set_fstab_args(args['fstab'])
-        else:
-            cmd += _set_ephemeral_args(args)
+
+    if module.params['state'] == 'ephemeral':
+        cmd += _set_ephemeral_args(args)
 
     cmd += [name]
 
@@ -538,8 +539,9 @@ def remount(module, args):
     else:
         if module.params['state'] != 'ephemeral':
             cmd += _set_fstab_args(args['fstab'])
-        else:
-            cmd += _set_ephemeral_args(args)
+
+    if module.params['state'] == 'ephemeral':
+        cmd += _set_ephemeral_args(args)
 
     cmd += [args['name']]
     out = err = ''
