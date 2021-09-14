@@ -924,8 +924,9 @@ def main():
                 # If state == 'ephemeral', check if the mountpoint src == module.params['src']
                 # If it doesn't, fail to prevent unwanted unmount or unwanted mountpoint override
                 if _is_same_mount_src(module, args):
-                    res, msg = remount(module, args)
                     changed = True
+                    if not module.check_mode:
+                        res, msg = remount(module, args)
                 else:
                     module.fail_json(
                         msg=(
