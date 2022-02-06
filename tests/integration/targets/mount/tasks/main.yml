@@ -406,3 +406,147 @@
     - /tmp/myfs1
     - /tmp/test_fstab
   when: ansible_system in ('Linux')
+
+- name: Block to test ephemeral option
+  block:
+  - name: Get checksum of /etc/fstab before mounting anything
+    stat:
+      path: '/etc/fstab'
+    register: fstab_stat_before_mount
+
+  - name: Create empty file A
+    community.general.filesize:
+      path: /tmp/myfs_A.img
+      size: 20M
+
+  - name: Format FS A
+    community.general.filesystem:
+      fstype: ext3
+      dev: /tmp/myfs_A.img
+
+  - name: Create empty file B
+    community.general.filesize:
+      path: /tmp/myfs_B.img
+      size: 20M
+
+  - name: Format FS B
+    community.general.filesystem:
+      fstype: ext3
+      dev: /tmp/myfs_B.img
+
+  - name: Mount the FS A with ephemeral state
+    mount:
+      path: /tmp/myfs
+      src: /tmp/myfs_A.img
+      fstype: ext3
+      state: ephemeral
+    register: ephemeral_mount_info
+
+  - name: Put something in the directory so we can do additional checks later on
+    copy:
+      content: 'Testing'
+      dest: /tmp/myfs/test_file
+
+  - name: Get checksum of /etc/fstab after an ephemeral mount
+    stat:
+      path: '/etc/fstab'
+    register: fstab_stat_after_mount
+
+  - name: Assert the mount occured and the fstab is unchanged
+    assert:
+      that:
+      - "'/tmp/myfs' is mount"
+      - ephemeral_mount_info['changed']
+      - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
+
+  - name: Get the last write time
+    shell: 'dumpe2fs /tmp/myfs_A.img 2>/dev/null | grep -i last write time: |cut -d: -f2-'
+    register: last_write_time
+
+  - name: Wait 2 second
+    pause:
+      seconds: 2
+
+  - name: Try to mount FS A where FS A is already mounted (should trigger remount and changed)
+    mount:
+      path: /tmp/myfs
+      src: /tmp/myfs_A.img
+      fstype: ext3
+      state: ephemeral
+    register: ephemeral_mount_info
+
+  - name: Get again the last write time
+    shell: 'dumpe2fs /tmp/myfs.img 2>/dev/null | grep -i last write time: |cut -d: -f2-'
+    register: last_write_time2
+
+  - name: Fail if they are the same (the FS was not remounted)
+    fail:
+      msg: Ephemeral filesytem was not remounted when mounting the same FS on the same path, testing of the module failed!
+    when: last_write is defined and last_write_time2 is defined and last_write_time.stdout == last_write_time2.stdout
+
+  - name: Assert the FS A is still mounted and the fstab unchanged
+    assert:
+      that:
+        - "'/tmp/myfs' is mount"
+        - ephemeral_mount_info['changed']
+        - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
+
+  - name: Try to mount file B on file A mountpoint (should fail)
+    mount:
+      path: /tmp/myfs
+      src: /tmp/myfs_B.img
+      fstype: ext3
+      state: ephemeral
+    register: ephemeral_mount_b_info
+    ignore_errors: true
+
+  - name: Assert that mounting FS B over FS A failed
+    assert:
+      that:
+        - "'/tmp/myfs' is mount"
+        - "'/tmp/myfs/test_file' is file"
+        - ephemeral_mount_b_info is failed
+
+  - name: Remount FS mounted with ephemeral option
+    mount:
+      path: /tmp/myfs
+      state: remounted
+
+  - name: Get checksum for /etc/fstab after a remount of an ephemeral mount
+    stat:
+      path: '/etc/fstab'
+    register: fstab_stat_after_remount
+
+  - name: Assert that /etc/fstab is unchanged after a remount of an ephemeral mount
+    assert:
+      that:
+      - "'/tmp/myfs' is mount"
+      - "'/tmp/myfs/test_file' is file"
+      - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_remount['stat']['checksum']
+
+  - name: Unmount FS with state = unmounted
+    mount:
+      path: /tmp/myfs
+      state: unmounted
+
+  - name: Get checksum for /etc/fstab after unmounting an ephemeral mount with state = unmounted
+    stat:
+      path: '/etc/fstab'
+    register: fstab_stat_after_unmount
+
+  - name: Assert that /etc/fstab is unchanged after unmounting an ephemeral mount with state = unmounted
+    assert:
+      that:
+      - "'/tmp/myfs' is not mount"
+      - "'/tmp/myfs/test_file' is not exists"
+      - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_unmount['stat']['checksum']
+
+  - name: Remove the test FS
+    file:
+      path: '{{ item }}'
+      state: absent
+    loop:
+    - /tmp/myfs_A.img
+    - /tmp/myfs_B.img
+    - /tmp/myfs
+  when: ansible_system in ('Linux')
