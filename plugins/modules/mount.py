@@ -728,8 +728,24 @@ def _is_same_mount_src(module, args, mntinfo_file="/proc/self/mountinfo"):
 
     for line in lines:
         fields = line.split()
-        if fields[4] == mountpoint and fields[-2] == src:
-            return True
+        if fields[4] == mountpoint:
+            if fields[-2] == src:
+                return True
+            # If a file was mounted, its source will be the loopback device. We need to check the corresponding file
+            elif module.params['state'] == 'ephemeral' and fields[-2].startswith("/dev/loop"):
+                # "/dev/loop0"[5:] == loop0
+                loop_dev=fields[-2][5:]
+                backing_file_file=f'/sys/block/{loop_dev}/loop/backing_file'
+
+                try:
+                    with open(backing_file_file) as f:
+                        backing_file_value = f.readline().strip()
+                except IOError:
+                    module.fail_json(msg=f'Could not get information about {fields[-2]} backing file from {backing_file_file}')
+
+                # If /dev/loop0 is carrying a mounted file /tmp/file, then backing_file_value == "/tmp/file"
+                if backing_file_value == src:
+                    return True
 
     # (dst == mountpoint and src == name) was never reached
     return False
