@@ -411,7 +411,7 @@
   block:
   - name: Get checksum of /etc/fstab before mounting anything
     stat:
-      path: '/etc/fstab'
+      path: /etc/fstab
     register: fstab_stat_before_mount
 
   - name: Create empty file A
@@ -449,18 +449,22 @@
 
   - name: Get checksum of /etc/fstab after an ephemeral mount
     stat:
-      path: '/etc/fstab'
+      path: /etc/fstab
     register: fstab_stat_after_mount
+
+  - name: Get mountinfo
+    shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
+    register: check_mountinfo
 
   - name: Assert the mount occured and the fstab is unchanged
     assert:
       that:
-      - "'/tmp/myfs' is mount"
+      - 1 == check_mountinfo.stdout_lines | length
       - ephemeral_mount_info['changed']
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
 
   - name: Get the last write time
-    shell: 'dumpe2fs /tmp/myfs_A.img 2>/dev/null | grep -i last write time: |cut -d: -f2-'
+    shell: 'dumpe2fs /tmp/myfs_A.img 2>/dev/null | grep -i "last write time:" |cut -d: -f2-'
     register: last_write_time
 
   - name: Wait 2 second
@@ -484,10 +488,14 @@
       msg: Ephemeral filesytem was not remounted when mounting the same FS on the same path, testing of the module failed!
     when: last_write is defined and last_write_time2 is defined and last_write_time.stdout == last_write_time2.stdout
 
+  - name: Get mountinfo
+    shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
+    register: check_mountinfo
+
   - name: Assert the FS A is still mounted and the fstab unchanged
     assert:
       that:
-        - "'/tmp/myfs' is mount"
+        - 1 == check_mountinfo.stdout_lines | length
         - ephemeral_mount_info['changed']
         - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
 
@@ -500,11 +508,20 @@
     register: ephemeral_mount_b_info
     ignore_errors: true
 
+  - name: Get mountinfo
+    shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
+    register: check_mountinfo
+  
+  - name: Try to stat our test file
+    stat:
+      path: /tmp/myfs/test_file
+    register: test_file_stat
+
   - name: Assert that mounting FS B over FS A failed
     assert:
       that:
-        - "'/tmp/myfs' is mount"
-        - "'/tmp/myfs/test_file' is file"
+        - 1 == check_mountinfo.stdout_lines | length
+        - test_file_stat['stat']['exists']
         - ephemeral_mount_b_info is failed
 
   - name: Remount FS mounted with ephemeral option
@@ -514,14 +531,17 @@
 
   - name: Get checksum for /etc/fstab after a remount of an ephemeral mount
     stat:
-      path: '/etc/fstab'
+      path: /etc/fstab
     register: fstab_stat_after_remount
+
+  - name: Get mountinfo
+    shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
+    register: check_mountinfo
 
   - name: Assert that /etc/fstab is unchanged after a remount of an ephemeral mount
     assert:
       that:
-      - "'/tmp/myfs' is mount"
-      - "'/tmp/myfs/test_file' is file"
+      - 1 == check_mountinfo.stdout_lines | length
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_remount['stat']['checksum']
 
   - name: Unmount FS with state = unmounted
@@ -531,14 +551,24 @@
 
   - name: Get checksum for /etc/fstab after unmounting an ephemeral mount with state = unmounted
     stat:
-      path: '/etc/fstab'
+      path: /etc/fstab
     register: fstab_stat_after_unmount
+
+  - name: Get mountinfo
+    shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
+    register: check_mountinfo
+    ignore_errors: true
+
+  - name: Try to stat our test file
+    stat:
+      path: /tmp/myfs/test_file
+    register: test_file_stat
 
   - name: Assert that /etc/fstab is unchanged after unmounting an ephemeral mount with state = unmounted
     assert:
       that:
-      - "'/tmp/myfs' is not mount"
-      - "'/tmp/myfs/test_file' is not exists"
+      - 0 == check_mountinfo.stdout_lines | length
+      - not test_file_stat['stat']['exists']
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_unmount['stat']['checksum']
 
   - name: Remove the test FS
