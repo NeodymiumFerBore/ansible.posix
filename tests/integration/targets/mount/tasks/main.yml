@@ -1,3 +1,18 @@
+- name: Patch centos repolist
+  ansible.builtin.shell:
+    cmd: "{{ item }}"
+  with_items:
+  - sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+  - sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+  when: ansible_distribution in ('CentOS') and ansible_distribution_version|int >= 8
+
+- name: Install dependencies
+  ansible.builtin.package:
+    name: e2fsprogs
+    state: present
+  #when: ansible_system not in ('Linux')
+  when: ansible_system not in ('SunOS')
+
 - name: Create the mount point
   file:
     state: directory
@@ -407,38 +422,71 @@
     - /tmp/test_fstab
   when: ansible_system in ('Linux')
 
+######################################################################################################
+
 - name: Block to test ephemeral option
   block:
-  - name: Get checksum of /etc/fstab before mounting anything
-    stat:
-      path: /etc/fstab
-    register: fstab_stat_before_mount
-
   - name: Create empty file A
     community.general.filesize:
       path: /tmp/myfs_A.img
       size: 20M
-
-  - name: Format FS A
-    community.general.filesystem:
-      fstype: ext3
-      dev: /tmp/myfs_A.img
 
   - name: Create empty file B
     community.general.filesize:
       path: /tmp/myfs_B.img
       size: 20M
 
-  - name: Format FS B
-    community.general.filesystem:
-      fstype: ext3
-      dev: /tmp/myfs_B.img
+  - name: Block to format FS on Linux
+    block:
+    - name: Format FS A on Linux
+      community.general.filesystem:
+        fstype: ext3
+        dev: /tmp/myfs_A.img
+  
+    - name: Format FS B on Linux
+      community.general.filesystem:
+        fstype: ext3
+        dev: /tmp/myfs_B.img
+    
+    - name: Register Linux block devices as fact
+      ansible.builtin.set_fact:
+        ephemeral_device_A: /tmp/myfs_A.img
+        ephemeral_device_B: /tmp/myfs_B.img
+        ephemeral_fstype: ext3
+        ephemeral_fstab: /etc/fstab
+    when: ansible_system in ('Linux')
+
+  - name: Block to format FS on Solaris (and *BSD ???)
+    block:
+    - name: Format FS A on Solaris/SunOS
+      ansible.builtin.shell: |
+        lofiadm -a /tmp/myfs_A.img
+        printf 'y\n' | newfs /dev/lofi/1
+      when: ansible_system in ('SunOS')
+    
+    - name: Format FS B on Solaris/SunOS (and *BSD ???)
+      ansible.builtin.shell: |
+        lofiadm -a /tmp/myfs_B.img
+        printf 'y\n' | newfs /dev/lofi/2
+    
+    - name: Register Unix block devices as fact
+      ansible.builtin.set_fact:
+        ephemeral_device_A: /dev/lofi/1
+        ephemeral_device_B: /dev/lofi/2
+        ephemeral_fstype: ufs
+        ephemeral_fstab: /etc/vfstab
+    when: ansible_system in ('SunOS')
+
+  - name: Get checksum of /etc/fstab before mounting anything
+    stat:
+      path: '{{ ephemeral_fstab }}'
+    register: fstab_stat_before_mount
 
   - name: Mount the FS A with ephemeral state
     mount:
       path: /tmp/myfs
-      src: /tmp/myfs_A.img
-      fstype: ext3
+      src: '{{ ephemeral_device_A }}'
+      fstype: '{{ ephemeral_fstype }}'
       state: ephemeral
     register: ephemeral_mount_info
 
@@ -449,12 +497,18 @@
 
   - name: Get checksum of /etc/fstab after an ephemeral mount
     stat:
-      path: /etc/fstab
+      path: '{{ ephemeral_fstab }}'
     register: fstab_stat_after_mount
 
-  - name: Get mountinfo
+  - name: Get mountinfo on Linux
     shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
     register: check_mountinfo
+    when: ansible_system in ('Linux')
+  
+  - name: Get mountinfo on Unix
+    shell: mount | awk '{print $1}' | grep '^/tmp/myfs$'
+    register: check_mountinfo
+    when: ansible_system in ('SunOS')
 
   - name: Assert the mount occured and the fstab is unchanged
     assert:
@@ -464,7 +518,7 @@
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
 
   - name: Get the last write time
-    shell: 'dumpe2fs /tmp/myfs_A.img 2>/dev/null | grep -i "last write time:" |cut -d: -f2-'
+    shell: 'dumpe2fs "{{ ephemeral_device_A }}" 2>/dev/null | grep -i "last write time:" |cut -d: -f2-'
     register: last_write_time
 
   - name: Wait 2 second
@@ -474,13 +528,13 @@
   - name: Try to mount FS A where FS A is already mounted (should trigger remount and changed)
     mount:
       path: /tmp/myfs
-      src: /tmp/myfs_A.img
-      fstype: ext3
+      src: '{{ ephemeral_device_A }}'
+      fstype: '{{ ephemeral_fstype }}'
       state: ephemeral
     register: ephemeral_mount_info
 
   - name: Get again the last write time
-    shell: 'dumpe2fs /tmp/myfs.img 2>/dev/null | grep -i last write time: |cut -d: -f2-'
+    shell: 'dumpe2fs "{{ ephemeral_device_A }}" 2>/dev/null | grep -i last write time: |cut -d: -f2-'
     register: last_write_time2
 
   - name: Fail if they are the same (the FS was not remounted)
@@ -488,9 +542,15 @@
       msg: Ephemeral filesytem was not remounted when mounting the same FS on the same path, testing of the module failed!
     when: last_write is defined and last_write_time2 is defined and last_write_time.stdout == last_write_time2.stdout
 
-  - name: Get mountinfo
+  - name: Get mountinfo on Linux
     shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
     register: check_mountinfo
+    when: ansible_system in ('Linux')
+  
+  - name: Get mountinfo on Unix
+    shell: mount | awk '{print $1}' | grep '^/tmp/myfs$'
+    register: check_mountinfo
+    when: ansible_system in ('SunOS')
 
   - name: Assert the FS A is still mounted and the fstab unchanged
     assert:
@@ -502,15 +562,21 @@
   - name: Try to mount file B on file A mountpoint (should fail)
     mount:
       path: /tmp/myfs
-      src: /tmp/myfs_B.img
-      fstype: ext3
+      src: '{{ ephemeral_device_B }}'
+      fstype: '{{ ephemeral_fstype }}'
       state: ephemeral
     register: ephemeral_mount_b_info
     ignore_errors: true
 
-  - name: Get mountinfo
+  - name: Get mountinfo on Linux
     shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
     register: check_mountinfo
+    when: ansible_system in ('Linux')
+  
+  - name: Get mountinfo on Unix
+    shell: mount | awk '{print $1}' | grep '^/tmp/myfs$'
+    register: check_mountinfo
+    when: ansible_system in ('SunOS')
   
   - name: Try to stat our test file
     stat:
@@ -529,16 +595,22 @@
       path: /tmp/myfs
       state: remounted
 
-  - name: Get checksum for /etc/fstab after a remount of an ephemeral mount
+  - name: Get fstab checksum after a remount of an ephemeral mount
     stat:
-      path: /etc/fstab
+      path: '{{ ephemeral_fstab }}'
     register: fstab_stat_after_remount
 
-  - name: Get mountinfo
+  - name: Get mountinfo on Linux
     shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
     register: check_mountinfo
+    when: ansible_system in ('Linux')
+  
+  - name: Get mountinfo on Unix
+    shell: mount | awk '{print $1}' | grep '^/tmp/myfs$'
+    register: check_mountinfo
+    when: ansible_system in ('SunOS')
 
-  - name: Assert that /etc/fstab is unchanged after a remount of an ephemeral mount
+  - name: Assert that fstab is unchanged after a remount of an ephemeral mount
     assert:
       that:
       - 1 == check_mountinfo.stdout_lines | length
@@ -549,34 +621,54 @@
       path: /tmp/myfs
       state: unmounted
 
-  - name: Get checksum for /etc/fstab after unmounting an ephemeral mount with state = unmounted
+  - name: Get fstab checksum after unmounting an ephemeral mount with state = unmounted
     stat:
-      path: /etc/fstab
+      path: '{{ ephemeral_fstab }}'
     register: fstab_stat_after_unmount
 
-  - name: Get mountinfo
+  - name: Get mountinfo on Linux
     shell: awk '{print $5}' /proc/self/mountinfo | grep -E '^/tmp/myfs$'
     register: check_mountinfo
     ignore_errors: true
+    when: ansible_system in ('Linux')
+  
+  - name: Get mountinfo on Unix
+    shell: mount | awk '{print $1}' | grep '^/tmp/myfs$'
+    register: check_mountinfo
+    ignore_errors: true
+    when: ansible_system in ('SunOS')
 
   - name: Try to stat our test file
     stat:
       path: /tmp/myfs/test_file
     register: test_file_stat
 
-  - name: Assert that /etc/fstab is unchanged after unmounting an ephemeral mount with state = unmounted
+  - name: Assert that fstab is unchanged after unmounting an ephemeral mount with state = unmounted
     assert:
       that:
       - 0 == check_mountinfo.stdout_lines | length
       - not test_file_stat['stat']['exists']
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_unmount['stat']['checksum']
 
-  - name: Remove the test FS
-    file:
-      path: '{{ item }}'
-      state: absent
-    loop:
-    - /tmp/myfs_A.img
-    - /tmp/myfs_B.img
-    - /tmp/myfs
-  when: ansible_system in ('Linux')
+  always:
+    - name: Unmount potential failure relicas
+      mount:
+        path: /tmp/myfs
+        state: unmounted
+    
+    - name: Remove loop devices on Unix
+      ansible.builtin.shell: "[ -b /dev/lofi/'{{ item }}' ] && lofiadm -d /dev/lofi/'{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
+      with_list:
+        - '1'
+        - '2'
+
+    - name: Remove the test FS
+      file:
+        path: '{{ item }}'
+        state: absent
+      with_list:
+        - /tmp/myfs_A.img
+        - /tmp/myfs_B.img
+        - /tmp/myfs
+  #when: ansible_system in ('Linux')
+  
