@@ -11,7 +11,8 @@
     name: e2fsprogs
     state: present
   #when: ansible_system not in ('Linux')
-  when: ansible_system not in ('SunOS')
+  #when: ansible_system not in ('SunOS')
+  when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
 
 - name: Create the mount point
   file:
@@ -454,22 +455,22 @@
         ephemeral_device_B: /tmp/myfs_B.img
         ephemeral_fstype: ext3
         ephemeral_fstab: /etc/fstab
-    when: ansible_system in ('Linux')
+    #when: ansible_system in ('Linux')
+    when: ansible_system not in ('SunOS')
 
-  - name: Block to format FS on Solaris (and *BSD ???)
+  - name: Block to format FS on Solaris/SunOS (and *BSD ???)
     block:
     - name: Format FS A on Solaris/SunOS
       ansible.builtin.shell: |
         lofiadm -a /tmp/myfs_A.img
         printf 'y\n' | newfs /dev/lofi/1
-      when: ansible_system in ('SunOS')
     
     - name: Format FS B on Solaris/SunOS (and *BSD ???)
       ansible.builtin.shell: |
         lofiadm -a /tmp/myfs_B.img
         printf 'y\n' | newfs /dev/lofi/2
     
-    - name: Register Unix block devices as fact
+    - name: Register Solaris block devices as fact
       ansible.builtin.set_fact:
         ephemeral_device_A: /dev/lofi/1
         ephemeral_device_B: /dev/lofi/2
@@ -505,7 +506,7 @@
     register: check_mountinfo
     when: ansible_system in ('Linux')
   
-  - name: Get mountinfo on Unix
+  - name: Get mountinfo on Solaris
     shell: mount | awk '{print $1}' | grep '^/tmp/myfs$'
     register: check_mountinfo
     when: ansible_system in ('SunOS')
@@ -517,6 +518,7 @@
       - ephemeral_mount_info['changed']
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
 
+  # THIS ALWAYS RETURN 0 BECAUSE OF THE CHAINED PIPES AND CUT ALWAYS RETURNING 0: NOT RELIABLE
   - name: Get the last write time
     shell: 'dumpe2fs "{{ ephemeral_device_A }}" 2>/dev/null | grep -i "last write time:" |cut -d: -f2-'
     register: last_write_time
@@ -525,6 +527,7 @@
     pause:
       seconds: 2
 
+  # HERE: THE PLAY CRASHES BECAUSE mount.py IS LOOKING FOR MOUNTINFO IN /proc/self/mountinfo
   - name: Try to mount FS A where FS A is already mounted (should trigger remount and changed)
     mount:
       path: /tmp/myfs
@@ -533,6 +536,7 @@
       state: ephemeral
     register: ephemeral_mount_info
 
+  # THIS ALWAYS RETURN 0 BECAUSE OF THE CHAINED PIPES AND CUT ALWAYS RETURNING 0: NOT RELIABLE
   - name: Get again the last write time
     shell: 'dumpe2fs "{{ ephemeral_device_A }}" 2>/dev/null | grep -i last write time: |cut -d: -f2-'
     register: last_write_time2
@@ -547,7 +551,7 @@
     register: check_mountinfo
     when: ansible_system in ('Linux')
   
-  - name: Get mountinfo on Unix
+  - name: Get mountinfo on Solaris
     shell: mount | awk '{print $1}' | grep '^/tmp/myfs$'
     register: check_mountinfo
     when: ansible_system in ('SunOS')
@@ -661,6 +665,7 @@
       with_list:
         - '1'
         - '2'
+      when: ansible_system in ('SunOS')
 
     - name: Remove the test FS
       file:
