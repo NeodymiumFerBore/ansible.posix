@@ -7,6 +7,8 @@
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
+from enum import Enum
+from queue import Empty
 __metaclass__ = type
 
 
@@ -634,10 +636,11 @@ def is_bind_mounted(module, linux_mounts, dest, src=None, fstype=None):
     return is_mounted
 
 
-def _get_mount_info(module, mntinfo_file="/proc/self/mountinfo"):
+#def _get_mount_info(module, mntinfo_file="/proc/self/mountinfo"):
+def _get_file_lines(module, file):
     """Return raw mount information"""
     try:
-        f = open(mntinfo_file)
+        f = open(file)
     except IOError:
         return
 
@@ -646,7 +649,7 @@ def _get_mount_info(module, mntinfo_file="/proc/self/mountinfo"):
     try:
         f.close()
     except IOError:
-        module.fail_json(msg="Cannot close file %s" % mntinfo_file)
+        module.fail_json(msg="Cannot close file %s" % file)
 
     return lines
 
@@ -654,7 +657,7 @@ def _get_mount_info(module, mntinfo_file="/proc/self/mountinfo"):
 def get_linux_mounts(module, mntinfo_file="/proc/self/mountinfo"):
     """Gather mount information"""
 
-    lines = _get_mount_info(module, mntinfo_file)
+    lines = _get_file_lines(module, mntinfo_file)
     # Keep same behavior than before
     if lines is None:
         return
@@ -716,39 +719,117 @@ def get_linux_mounts(module, mntinfo_file="/proc/self/mountinfo"):
     return mounts
 
 
-def _is_same_mount_src(module, args, mntinfo_file="/proc/self/mountinfo"):
-    """Return True if the mounted fs on mountpoint is the same source than src"""
-    mountpoint = args['name']
-    src = args['src']
-    lines = _get_mount_info(module)
+def _resolv_linux_loop_backing_file(module, file: str):
+    """If a loop device is given, return the file path associated with it. If a file path is given, return all loop devices associated to it."""
+    if platform.system() != 'Linux':
+        return None
 
-    # If this function is used and we cannot retrieve mount info, we must fail to avoid unexpected behavior
-    if lines is None:
-        module.fail_json(msg="Unable to retrieve mount info from '%s'" % mntinfo_file)
+    if file.startswith('/dev/loop'):
+        # Find which file is associated with the given device
+        # "/dev/loop0"[5:] == loop0
+        loop_dev = file[5:]
+        backing_file_file = "/sys/block/%s/loop/backing_file" % loop_dev
+        try:
+            with open(backing_file_file) as f:
+                backing_file = f.readline().strip()
+        except FileNotFoundError:
+            backing_file = ""
+        except IOError:
+            module.fail_json(msg="Could not get information about %s backing file from file %s" % (fields[-2], backing_file_file))
 
-    for line in lines:
-        fields = line.split()
-        if fields[4] == mountpoint:
-            if fields[-2] == src:
-                return True
-            # If a file was mounted, its source will be the loopback device. We need to check the corresponding file
-            elif module.params['state'] == 'ephemeral' and fields[-2].startswith("/dev/loop"):
-                # "/dev/loop0"[5:] == loop0
-                loop_dev = fields[-2][5:]
-                backing_file_file = "/sys/block/%s/loop/backing_file" % loop_dev
+        return backing_file
 
-                try:
-                    with open(backing_file_file) as f:
-                        backing_file_value = f.readline().strip()
-                except IOError:
-                    module.fail_json(msg="Could not get information about %s backing file from %s" % (fields[-2], backing_file_file))
+    else:
+        # Find all loop devices associated with the given file
+        bin_path = module.get_bin_path('losetup', required=True)
+        cmd = "%s --list"
+        rc, out, err = module.run_command(cmd)
+        losetup_lines = []
+        loop_devices = []
 
-                # If /dev/loop0 is carrying a mounted file /tmp/file, then backing_file_value == "/tmp/file"
-                if backing_file_value == src:
-                    return True
+        if len(out):
+            losetup_lines = to_native(out).strip().split('\n')
+        else:
+            module.fail_json(msg="Unable to retrieve loop device info with command '%s'" % cmd)
 
-    # (dst == mountpoint and src == name) was never reached
-    return False
+        for line in losetup_lines:
+            fields = line.split()
+            loop_dev = fields[0]
+            backing_file = fields[5]
+
+            if backing_file == file:
+                loop_devices.append(loop_dev)
+
+        return loop_devices
+
+
+def _is_same_mount_src(module, src, mountpoint, linux_mounts):
+    """Return True if the mounted fs on mountpoint is the same source than src. Return False if mountpoint is not a mountpoint"""
+    backing_file = None
+    is_same_src = False
+    mounts = {}
+
+    # If the provided mountpoint is not a mountpoint, don't waste time
+    if (
+            not is_bind_mounted(module, linux_mounts, mountpoint, src) or
+            not ismount(mountpoint)):
+        return False
+
+    if platform.system() == 'Linux':
+        # get_linux_mounts() does not record the right src for non bind mounts,
+        # but can be trusted for Linux bind mounts (in linux_mounts).
+        # For Linux bind mounts, use linux_mounts because the mount command does not return
+        # the actual source for bind mounts, but the device of the source.
+        # For Solaris and FreeBSD, the mount command returns the expected source.
+
+        # If mountpoint is bind mounted, we already have our answer in linux_mounts
+        if (
+            is_bind_mounted(module, linux_mounts, mountpoint, src) and
+            linux_mounts[mountpoint]['src'] == src):
+            return True
+
+        # If the user uses a loop device as the source, we better resolve it
+        elif src.startswith('/dev/loop'):
+            # loop files are not shown in 'mount' output on Linux, except if it was explicitly created before mounting the associated file
+            backing_file = _resolv_linux_loop_backing_file(module, src)
+
+            # If backing_file is empty, then the backing_file file does not exist: the loop device is not associated,
+            # and therefore is not mounted anywhere
+            if backing_file == "":
+                return False
+
+        # Else, then retrieve loop devices that are possibly backed by the given source
+        else:
+            loop_devices = _resolv_linux_loop_backing_file(module, src)
+
+    # mount with parameter -v has a close behavior on Linux, *BSD, SunOS
+    # Requires -v with SunOS. Without -v, source and destination are reversed
+    # Output format differs from a system to another, but field[0:2] are consistent: [src, 'on', dest]
+    cmd = '%s -v' % module.get_bin_path('mount', required=True)
+    rc, out, err = module.run_command(cmd)
+    mounts = []
+
+    if len(out):
+        mounts = to_native(out).strip().split('\n')
+    else:
+        module.fail_json(msg="Unable to retrieve mount info with command '%s'" % cmd)
+
+    for mnt in mounts:
+        fields = mnt.split()
+        mp_src = fields[0]
+        mp_dst = fields[2]
+        if mp_src == src and mp_dst == mountpoint:
+            is_same_src = True
+            break
+        
+        # loop files are implicitly created with Linux, try to match it
+        elif platform.system() == 'Linux' and mp_dst == mountpoint:
+            # Check if backing_file or corresponding loop device is mounted here
+            if mp_src == backing_file or mp_src in loop_devices:
+                is_same_src = True
+                break
+
+    return is_same_src
 
 
 def main():
@@ -941,7 +1022,7 @@ def main():
             if state == 'ephemeral':
                 # If state == 'ephemeral', check if the mountpoint src == module.params['src']
                 # If it doesn't, fail to prevent unwanted unmount or unwanted mountpoint override
-                if _is_same_mount_src(module, args):
+                if _is_same_mount_src(module, args['src'], args['name'], linux_mounts):
                     changed = True
                     if not module.check_mode:
                         res, msg = remount(module, args)
