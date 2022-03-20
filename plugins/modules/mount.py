@@ -7,8 +7,6 @@
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
 from __future__ import absolute_import, division, print_function
-from enum import Enum
-from queue import Empty
 __metaclass__ = type
 
 
@@ -636,7 +634,6 @@ def is_bind_mounted(module, linux_mounts, dest, src=None, fstype=None):
     return is_mounted
 
 
-#def _get_mount_info(module, mntinfo_file="/proc/self/mountinfo"):
 def _get_file_lines(module, file):
     """Return raw mount information"""
     try:
@@ -719,46 +716,53 @@ def get_linux_mounts(module, mntinfo_file="/proc/self/mountinfo"):
     return mounts
 
 
-def _resolv_linux_loop_backing_file(module, file: str):
-    """If a loop device is given, return the file path associated with it. If a file path is given, return all loop devices associated to it."""
+def _resolv_linux_loop_backing_file(module, file):
+    """If a loop device is given, return the file path associated with it. If a file path is given, return a list of all loop devices associated to it."""
     if platform.system() != 'Linux':
         return None
 
-    if file.startswith('/dev/loop'):
-        # Find which file is associated with the given device
-        # "/dev/loop0"[5:] == loop0
-        loop_dev = file[5:]
-        backing_file_file = "/sys/block/%s/loop/backing_file" % loop_dev
-        try:
-            with open(backing_file_file) as f:
-                backing_file = f.readline().strip()
-        except FileNotFoundError:
-            backing_file = ""
-        except IOError:
-            module.fail_json(msg="Could not get information about %s backing file from file %s" % (fields[-2], backing_file_file))
+    # if file.startswith('/dev/loop'):
+    #     # Find which file is associated with the given device
+    #     # "/dev/loop0"[5:] == loop0
+    #     loop_dev = file[5:]
+    #     backing_file_file = "/sys/block/%s/loop/backing_file" % loop_dev
+    #     try:
+    #         with open(backing_file_file) as f:
+    #             backing_file = f.readline().strip()
+    #     except FileNotFoundError:
+    #         backing_file = ""
+    #     except IOError:
+    #         module.fail_json(msg="Could not get information about %s backing file from file %s" % (fields[-2], backing_file_file))
 
-        return backing_file
+    #     return backing_file
 
     else:
         # Find all loop devices associated with the given file
         bin_path = module.get_bin_path('losetup', required=True)
-        cmd = "%s --list"
+        cmd = "%s --list" % bin_path
         rc, out, err = module.run_command(cmd)
         losetup_lines = []
         loop_devices = []
 
         if len(out):
             losetup_lines = to_native(out).strip().split('\n')
+            # Remove headers
+            losetup_lines.pop(0)
         else:
             module.fail_json(msg="Unable to retrieve loop device info with command '%s'" % cmd)
 
         for line in losetup_lines:
             fields = line.split()
             loop_dev = fields[0]
-            backing_file = fields[5]
+            back_file = fields[5]
 
-            if backing_file == file:
+            if back_file == file:
+                # A file can be associated with multiple loop devices
                 loop_devices.append(loop_dev)
+            elif loop_dev == file:
+                # If we get here, then the provided in argument 'file' is a loop device. A loop device can be
+                # associated 1 and only 1 file, so we can return
+                return back_file
 
         return loop_devices
 
@@ -771,7 +775,7 @@ def _is_same_mount_src(module, src, mountpoint, linux_mounts):
 
     # If the provided mountpoint is not a mountpoint, don't waste time
     if (
-            not is_bind_mounted(module, linux_mounts, mountpoint, src) or
+            not is_bind_mounted(module, linux_mounts, mountpoint, src) and
             not ismount(mountpoint)):
         return False
 
@@ -783,9 +787,7 @@ def _is_same_mount_src(module, src, mountpoint, linux_mounts):
         # For Solaris and FreeBSD, the mount command returns the expected source.
 
         # If mountpoint is bind mounted, we already have our answer in linux_mounts
-        if (
-            is_bind_mounted(module, linux_mounts, mountpoint, src) and
-            linux_mounts[mountpoint]['src'] == src):
+        if (is_bind_mounted(module, linux_mounts, mountpoint, src) and linux_mounts[mountpoint]['src'] == src):
             return True
 
         # If the user uses a loop device as the source, we better resolve it
@@ -821,7 +823,6 @@ def _is_same_mount_src(module, src, mountpoint, linux_mounts):
         if mp_src == src and mp_dst == mountpoint:
             is_same_src = True
             break
-        
         # loop files are implicitly created with Linux, try to match it
         elif platform.system() == 'Linux' and mp_dst == mountpoint:
             # Check if backing_file or corresponding loop device is mounted here
