@@ -547,14 +547,15 @@ def remount(module, args):
     out = err = ''
 
     # DEBUG DEBUG DEBUG DEBUG DEBUG
-    if module.params['state'] == 'ephemeral':
-        img='/tmp/myfs_A.img'
-    else:
-        img='/tmp/myfs.img'
-    import subprocess, time
-    mycmd = "WILL BE EXECUTED: '%s' -\n BEFORE: " % ' '.join(cmd)
-    mycmd += subprocess.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
-    time.sleep(5)
+    #if module.params['state'] == 'ephemeral':
+    #    img='/tmp/myfs_A.img'
+    #else:
+    #    img='/tmp/myfs.img'
+    #import subprocess, time #, commands
+    #mycmd = "WILL BE EXECUTED: '%s' -\n BEFORE: " % ' '.join(cmd)
+    #mycmd += subprocess.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
+    #mycmd += commands.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
+    #time.sleep(5)
 
         #raise Exception("WE GOT IN REMOUNT, AND THE COMMAND TO EXECUTE WAS: '%s'" % cmd)
 
@@ -591,15 +592,16 @@ def remount(module, args):
             rc, msg = mount(module, args)
 
     # DEBUG DEBUG DEBUG DEBUG DEBUG
-    if module.params['state'] == 'ephemeral':
-        img='/tmp/myfs_A.img'
-    else:
-        img='/tmp/myfs.img'
-    import subprocess, time
-    mycmd += '\nAFTER: '
-    mycmd += subprocess.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
-    mycmd += '\nrc = %s' % str(rc)
-    args['warnings'].append(mycmd)
+    #if module.params['state'] == 'ephemeral':
+    #    img='/tmp/myfs_A.img'
+    #else:
+    #    img='/tmp/myfs.img'
+    #import subprocess, time #, commands
+    #mycmd += '\nAFTER: '
+    #mycmd += subprocess.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
+    #mycmd += commands.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
+    #mycmd += '\nrc = %s' % str(rc)
+    #args['warnings'].append(mycmd)
     
     return rc, msg
 
@@ -739,62 +741,9 @@ def get_linux_mounts(module, mntinfo_file="/proc/self/mountinfo"):
     return mounts
 
 
-def _resolv_linux_loop_backing_file(module, file):
-    """If a loop device is given, return the file path associated with it. If a file path is given, return a list of all loop devices associated to it."""
-    if platform.system() != 'Linux':
-        return None
-
-    # if file.startswith('/dev/loop'):
-    #     # Find which file is associated with the given device
-    #     # "/dev/loop0"[5:] == loop0
-    #     loop_dev = file[5:]
-    #     backing_file_file = "/sys/block/%s/loop/backing_file" % loop_dev
-    #     try:
-    #         with open(backing_file_file) as f:
-    #             backing_file = f.readline().strip()
-    #     except FileNotFoundError:
-    #         backing_file = ""
-    #     except IOError:
-    #         module.fail_json(msg="Could not get information about %s backing file from file %s" % (fields[-2], backing_file_file))
-
-    #     return backing_file
-
-    else:
-        # Find all loop devices associated with the given file
-        bin_path = module.get_bin_path('losetup', required=True)
-        cmd = "%s --list" % bin_path
-        rc, out, err = module.run_command(cmd)
-        losetup_lines = []
-        loop_devices = []
-
-        if len(out):
-            losetup_lines = to_native(out).strip().split('\n')
-            # Remove headers
-            losetup_lines.pop(0)
-        else:
-            module.fail_json(msg="Unable to retrieve loop device info with command '%s'" % cmd)
-
-        for line in losetup_lines:
-            fields = line.split()
-            loop_dev = fields[0]
-            back_file = fields[5]
-
-            if back_file == file:
-                # A file can be associated with multiple loop devices
-                loop_devices.append(loop_dev)
-            elif loop_dev == file:
-                # If we get here, then the provided in argument 'file' is a loop device. A loop device can be
-                # associated 1 and only 1 file, so we can return
-                return back_file
-
-        return loop_devices
-
-
 def _is_same_mount_src(module, src, mountpoint, linux_mounts):
     """Return True if the mounted fs on mountpoint is the same source than src. Return False if mountpoint is not a mountpoint"""
-    backing_file = None
     is_same_src = False
-    mounts = {}
 
     # If the provided mountpoint is not a mountpoint, don't waste time
     if (
@@ -813,23 +762,9 @@ def _is_same_mount_src(module, src, mountpoint, linux_mounts):
         if (is_bind_mounted(module, linux_mounts, mountpoint, src) and linux_mounts[mountpoint]['src'] == src):
             return True
 
-        # If the user uses a loop device as the source, we better resolve it
-        elif src.startswith('/dev/loop'):
-            # loop files are not shown in 'mount' output on Linux, except if it was explicitly created before mounting the associated file
-            backing_file = _resolv_linux_loop_backing_file(module, src)
-
-            # If backing_file is empty, then the backing_file file does not exist: the loop device is not associated,
-            # and therefore is not mounted anywhere
-            if backing_file == "":
-                return False
-
-        # Else, then retrieve loop devices that are possibly backed by the given source
-        else:
-            loop_devices = _resolv_linux_loop_backing_file(module, src)
-
     # mount with parameter -v has a close behavior on Linux, *BSD, SunOS
     # Requires -v with SunOS. Without -v, source and destination are reversed
-    # Output format differs from a system to another, but field[0:2] are consistent: [src, 'on', dest]
+    # Output format differs from a system to another, but field[0:3] are consistent: [src, 'on', dest]
     cmd = '%s -v' % module.get_bin_path('mount', required=True)
     rc, out, err = module.run_command(cmd)
     mounts = []
@@ -846,12 +781,6 @@ def _is_same_mount_src(module, src, mountpoint, linux_mounts):
         if mp_src == src and mp_dst == mountpoint:
             is_same_src = True
             break
-        # loop files are implicitly created with Linux, try to match it
-        elif platform.system() == 'Linux' and mp_dst == mountpoint:
-            # Check if backing_file or corresponding loop device is mounted here
-            if mp_src == backing_file or mp_src in loop_devices:
-                is_same_src = True
-                break
 
     return is_same_src
 
