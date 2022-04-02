@@ -743,23 +743,21 @@ def get_linux_mounts(module, mntinfo_file="/proc/self/mountinfo"):
 
 def _is_same_mount_src(module, src, mountpoint, linux_mounts):
     """Return True if the mounted fs on mountpoint is the same source than src. Return False if mountpoint is not a mountpoint"""
-    is_same_src = False
-
     # If the provided mountpoint is not a mountpoint, don't waste time
     if (
-            not is_bind_mounted(module, linux_mounts, mountpoint, src) and
-            not ismount(mountpoint)):
+            not ismount(mountpoint) and
+            not is_bind_mounted(module, linux_mounts, mountpoint)):
         return False
 
-    if platform.system() == 'Linux':
-        # get_linux_mounts() does not record the right src for non bind mounts,
-        # but can be trusted for Linux bind mounts (in linux_mounts).
-        # For Linux bind mounts, use linux_mounts because the mount command does not return
+    # Treat Linux bind mounts
+    if platform.system() == 'Linux' and linux_mounts is not None:
+        # For Linux bind mounts only: the mount command does not return
         # the actual source for bind mounts, but the device of the source.
-        # For Solaris and FreeBSD, the mount command returns the expected source.
-
-        # If mountpoint is bind mounted, we already have our answer in linux_mounts
-        if (is_bind_mounted(module, linux_mounts, mountpoint, src) and linux_mounts[mountpoint]['src'] == src):
+        # is_bind_mounted() called with the 'src' parameter will return True if
+        # the mountpoint is a bind mount AND the source FS is the same than 'src'.
+        # is_bind_mounted() is not reliable on Solaris, NetBSD and OpenBSD.
+        # But we can rely on 'mount -v' on all other platforms, and Linux non-bind mounts.
+        if (is_bind_mounted(module, linux_mounts, mountpoint, src)):
             return True
 
     # mount with parameter -v has a close behavior on Linux, *BSD, SunOS
@@ -779,10 +777,9 @@ def _is_same_mount_src(module, src, mountpoint, linux_mounts):
         mp_src = fields[0]
         mp_dst = fields[2]
         if mp_src == src and mp_dst == mountpoint:
-            is_same_src = True
-            break
+            return True
 
-    return is_same_src
+    return False
 
 
 def main():
