@@ -546,19 +546,6 @@ def remount(module, args):
     cmd += [args['name']]
     out = err = ''
 
-    # DEBUG DEBUG DEBUG DEBUG DEBUG
-    #if module.params['state'] == 'ephemeral':
-    #    img='/tmp/myfs_A.img'
-    #else:
-    #    img='/tmp/myfs.img'
-    #import subprocess, time #, commands
-    #mycmd = "WILL BE EXECUTED: '%s' -\n BEFORE: " % ' '.join(cmd)
-    #mycmd += subprocess.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
-    #mycmd += commands.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
-    #time.sleep(5)
-
-        #raise Exception("WE GOT IN REMOUNT, AND THE COMMAND TO EXECUTE WAS: '%s'" % cmd)
-
     try:
         if platform.system().lower().endswith('bsd'):
             # Note: Forcing BSDs to do umount/mount due to BSD remount not
@@ -591,18 +578,6 @@ def remount(module, args):
         if rc == 0:
             rc, msg = mount(module, args)
 
-    # DEBUG DEBUG DEBUG DEBUG DEBUG
-    #if module.params['state'] == 'ephemeral':
-    #    img='/tmp/myfs_A.img'
-    #else:
-    #    img='/tmp/myfs.img'
-    #import subprocess, time #, commands
-    #mycmd += '\nAFTER: '
-    #mycmd += subprocess.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
-    #mycmd += commands.getoutput("dumpe2fs '%s' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-" % img)
-    #mycmd += '\nrc = %s' % str(rc)
-    #args['warnings'].append(mycmd)
-    
     return rc, msg
 
 
