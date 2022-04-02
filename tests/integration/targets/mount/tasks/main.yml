@@ -424,9 +424,28 @@
   when: ansible_system in ('Linux')
 
 ######################################################################################################
+######################################################################################################
+######################################################################################################
 
 - name: Block to test ephemeral option
+  tags: ['ephemeral']
   block:
+  - name: Patch centos repolist
+    ansible.builtin.shell:
+      cmd: "{{ item }}"
+    with_items:
+    - sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+    - sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+    when: ansible_distribution in ('CentOS') and ansible_distribution_version|int >= 8
+
+  - name: Install dependencies
+    ansible.builtin.package:
+      name: e2fsprogs
+      state: present
+    #when: ansible_system not in ('Linux')
+    #when: ansible_system not in ('SunOS')
+    when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
+
   - name: Create empty file A
     community.general.filesize:
       path: /tmp/myfs_A.img
@@ -470,13 +489,16 @@
         lofiadm -a /tmp/myfs_B.img
         printf 'y\n' | newfs /dev/lofi/2
     
-    - name: Register Solaris block devices as fact
+    - name: Register Solaris/SunOS block devices as fact
       ansible.builtin.set_fact:
         ephemeral_device_A: /dev/lofi/1
         ephemeral_device_B: /dev/lofi/2
         ephemeral_fstype: ufs
         ephemeral_fstab: /etc/vfstab
     when: ansible_system in ('SunOS')
+
+  - name: DEBUG create fstab when it doesnt exist
+    shell: 'if ! stat {{ ephemeral_fstab }}; then touch {{ ephemeral_fstab }}; fi'
 
   - name: Get checksum of /etc/fstab before mounting anything
     stat:
@@ -488,6 +510,7 @@
       path: /tmp/myfs
       src: '{{ ephemeral_device_A }}'
       fstype: '{{ ephemeral_fstype }}'
+      opts: rw
       state: ephemeral
     register: ephemeral_mount_info
 
@@ -512,62 +535,40 @@
       - ephemeral_mount_info['changed']
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
 
-  - name: Get the last write time on Linux
-    shell: "dumpe2fs '{{ ephemeral_device_A }}' 2>/dev/null | grep -i 'last write time:' | cut -d: -f2-"
-    register: linux_last_write_time1
-    when: ansible_system in ('Linux')
-
-  - name: Get the last write time on SunOS/Solaris
-    shell: grep '/tmp/myfs' /etc/mnttab | awk '{print $5}'
-    register: sunos_last_write_time1
-    when: ansible_system in ('SunOS')
-
-  - name: Wait 2 second
-    pause:
-      seconds: 2
+  - name: Get first mount record
+    shell: mount -v | grep '/tmp/myfs'
+    register: ephemeral_mount_record_1
+    changed_when: no
 
   - name: Try to mount FS A where FS A is already mounted (should trigger remount and changed)
     mount:
       path: /tmp/myfs
       src: '{{ ephemeral_device_A }}'
       fstype: '{{ ephemeral_fstype }}'
+      opts: ro
       state: ephemeral
     register: ephemeral_mount_info
 
-  # THIS ALWAYS RETURN 0 BECAUSE OF THE CHAINED PIPES AND CUT ALWAYS RETURNING 0: NOT RELIABLE
-  - name: Get again the last write time
-    shell: "dumpe2fs '{{ ephemeral_device_A }}' 2>/dev/null | grep -i 'last write time:' |cut -d: -f2-"
-    register: linux_last_write_time2
-    when: ansible_system in ('Linux')
-  
-  - name: Get the last write time on SunOS/Solaris
-    shell: grep '/tmp/myfs' /etc/mnttab | awk '{print $5}'
-    register: sunos_last_write_time2
-    when: ansible_system in ('SunOS')
+  - name: Get second mount record (should be different than the first)
+    shell: mount -v | grep '/tmp/myfs'
+    register: ephemeral_mount_record_2
+    changed_when: no
 
   - name: DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG
     debug:
       msg:
-        - "{{ linux_last_write_time1 }}"
-        - "{{ linux_last_write_time2 }}"
-        - "{{ sunos_last_write_time1 }}"
-        - "{{ sunos_last_write_time2 }}"
-
-  - name: Fail if they are the same (the FS was not remounted)
-    fail:
-      msg: Ephemeral filesytem was not remounted when mounting the same FS on the same path, testing of the module failed!
-    when: >
-      (ansible_system == 'Linux' and linux_last_write_time1.stdout == linux_last_write_time2.stdout) or
-      (ansible_system == 'SunOS' and sunos_last_write_time1.stdout == sunos_last_write_time2.stdout)
+        - "{{ ephemeral_mount_record_1 }}"
+        - "{{ ephemeral_mount_record_2 }}"
 
   - name: Get mountinfo
     shell: mount -v | awk '{print $3}' | grep '^/tmp/myfs$' | wc -l
     register: check_mountinfo
 
-  - name: Assert the FS A is still mounted and the fstab unchanged
+  - name: Assert the FS A is still mounted, the options changed and the fstab unchanged
     assert:
       that:
         - check_mountinfo.stdout|int == 1
+        - ephemeral_mount_record_1.stdout != ephemeral_mount_record_2.stdout
         - ephemeral_mount_info['changed']
         - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_mount['stat']['checksum']
 
@@ -579,6 +580,10 @@
       state: ephemeral
     register: ephemeral_mount_b_info
     ignore_errors: true
+
+  - name: Get third mount record (should be the same than the second)
+    shell: mount -v | grep '/tmp/myfs'
+    register: ephemeral_mount_record_3
 
   - name: Get mountinfo
     shell: mount -v | awk '{print $3}' | grep '^/tmp/myfs$' | wc -l
@@ -593,6 +598,7 @@
     assert:
       that:
         - check_mountinfo.stdout|int == 1
+        - ephemeral_mount_record_2.stdout == ephemeral_mount_record_3.stdout
         - test_file_stat['stat']['exists']
         - ephemeral_mount_b_info is failed
 
@@ -625,7 +631,6 @@
     stat:
       path: '{{ ephemeral_fstab }}'
     register: fstab_stat_after_unmount
-
   
   - name: Get mountinfo
     shell: mount -v | awk '{print $3}' | grep '^/tmp/myfs$' | wc -l
