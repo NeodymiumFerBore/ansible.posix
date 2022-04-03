@@ -10,9 +10,9 @@
   ansible.builtin.package:
     name: e2fsprogs
     state: present
-  #when: ansible_system not in ('Linux')
+  when: ansible_system in ('Linux')
   #when: ansible_system not in ('SunOS')
-  when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
+  #when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
 
 - name: Create the mount point
   file:
@@ -442,9 +442,9 @@
     ansible.builtin.package:
       name: e2fsprogs
       state: present
-    #when: ansible_system not in ('Linux')
+    when: ansible_system in ('Linux')
     #when: ansible_system not in ('SunOS')
-    when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
+    #when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
 
   - name: Create empty file A
     community.general.filesize:
@@ -455,6 +455,8 @@
     community.general.filesize:
       path: /tmp/myfs_B.img
       size: 20M
+
+##### FORMAT FS ON LINUX
 
   - name: Block to format FS on Linux
     block:
@@ -474,19 +476,20 @@
         ephemeral_device_B: /tmp/myfs_B.img
         ephemeral_fstype: ext3
         ephemeral_fstab: /etc/fstab
-    #when: ansible_system in ('Linux')
-    when: ansible_system not in ('SunOS')
+    when: ansible_system in ('Linux')
 
-  - name: Block to format FS on Solaris/SunOS (and *BSD ???)
+##### FORMAT FS ON SOLARIS
+
+  - name: Block to format FS on Solaris/SunOS
     block:
     - name: Format FS A on Solaris/SunOS
-      ansible.builtin.shell: |
-        lofiadm -a /tmp/myfs_A.img
+      ansible.builtin.shell: >
+        lofiadm -a /tmp/myfs_A.img /dev/lofi/1 &&
         printf 'y\n' | newfs /dev/lofi/1
     
-    - name: Format FS B on Solaris/SunOS (and *BSD ???)
-      ansible.builtin.shell: |
-        lofiadm -a /tmp/myfs_B.img
+    - name: Format FS B on Solaris/SunOS
+      ansible.builtin.shell: >
+        lofiadm -a /tmp/myfs_B.img /dev/lofi/2 &&
         printf 'y\n' | newfs /dev/lofi/2
     
     - name: Register Solaris/SunOS block devices as fact
@@ -496,6 +499,38 @@
         ephemeral_fstype: ufs
         ephemeral_fstab: /etc/vfstab
     when: ansible_system in ('SunOS')
+  
+##### FORMAT FS ON FREEBSD
+
+  - name: Block to format FS on FreeBSD
+    block:
+    - name: Register FreeBSD block devices as fact
+      ansible.builtin.set_fact:
+        ephemeral_device_A: /dev/md1
+        ephemeral_device_B: /dev/md2
+        ephemeral_fstype: ufs
+        ephemeral_fstab: /etc/fstab
+
+    - name: Prepare block devices on FreeBSD
+      ansible.builtin.shell: |
+        mdconfig -a -t vnode -f /tmp/myfs_A.img -u /dev/md1
+        mdconfig -a -t vnode -f /tmp/myfs_B.img -u /dev/md2
+
+    - name: Format FS A on FreeBSD
+      community.general.filesystem:
+        fstype: ufs
+        dev: /dev/md1
+
+    - name: Format FS B on FreeBSD
+      community.general.filesystem:
+        fstype: ufs
+        dev: /dev/md2
+    when: ansible_system in ('FreeBSD')
+
+  #- name: DEBUG - FAIL ON PURPOSE
+  #  shell: 'false'
+
+##### TESTS
 
   - name: DEBUG create fstab when it doesnt exist
     shell: 'if ! stat {{ ephemeral_fstab }}; then touch {{ ephemeral_fstab }}; fi'
@@ -648,26 +683,39 @@
       - not test_file_stat['stat']['exists']
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_unmount['stat']['checksum']
 
-  always:
-    - name: Unmount potential failure relicas
-      mount:
-        path: /tmp/myfs
-        state: unmounted
+  # always:
+  #   - name: Unmount potential failure relicas
+  #     mount:
+  #       path: /tmp/myfs
+  #       state: unmounted
     
-    - name: Remove loop devices on SunOS/Solaris
-      ansible.builtin.shell: "[ -b /dev/lofi/'{{ item }}' ] && lofiadm -d /dev/lofi/'{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
-      with_list:
-        - '1'
-        - '2'
-      when: ansible_system in ('SunOS')
+  #   - name: Remove loop devices on SunOS/Solaris
+  #     ansible.builtin.shell: "lofiadm -d /dev/lofi/'{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
+  #     #with_list:
+  #     loop:
+  #       - '1'
+  #       - '2'
+  #     when: ansible_system in ('SunOS')
 
-    - name: Remove the test FS
-      file:
-        path: '{{ item }}'
-        state: absent
-      with_list:
-        - /tmp/myfs_A.img
-        - /tmp/myfs_B.img
-        - /tmp/myfs
-  when: ansible_system in ('Linux', 'SunOS')
+  #   # DEBUG: variabilize loop device removal commands,
+  #   #        so we can merge these loops? (with block devices facts)
+
+  #   - name: Remove loop devices on FreeBSD
+  #     ansible.builtin.shell: "mdconfig -d -u '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
+  #     #with_list:
+  #     loop:
+  #       - '1'
+  #       - '2'
+  #     when: ansible_system in ('FreeBSD')
+
+  #   - name: Remove the test FS
+  #     file:
+  #       path: '{{ item }}'
+  #       state: absent
+  #     #with_list:
+  #     loop:
+  #       - /tmp/myfs_A.img
+  #       - /tmp/myfs_B.img
+  #       - /tmp/myfs
+  when: ansible_system in ('Linux', 'SunOS', 'FreeBSD')
   
