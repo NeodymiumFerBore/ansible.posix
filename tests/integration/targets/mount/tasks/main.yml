@@ -542,7 +542,7 @@
       ansible.builtin.set_fact:
         ephemeral_device_A: /dev/vnd1
         ephemeral_device_B: /dev/vnd2
-        ephemeral_fstype: ffs
+        ephemeral_fstype: ufs
         ephemeral_fstab: /etc/fstab
 
     - name: Prepare block devices on NetBSD
@@ -552,18 +552,22 @@
 
     - name: Format FS A on NetBSD
       ansible.builtin.shell: /usr/bin/yes | /sbin/newfs /dev/vnd1
-      # The filesystem module does not know "ffs" fstype
+      # Cannot use filesystem module on a fresh NetBSD: blkid is absent
       #community.general.filesystem:
-      #  fstype: ffs
+      #  fstype: ufs
       #  dev: /dev/vnd1
 
     - name: Format FS B on NetBSD
       ansible.builtin.shell: /usr/bin/yes | /sbin/newfs /dev/vnd2
-      # The filesystem module does not know "ffs" fstype
+      # Cannot use filesystem module on a fresh NetBSD: blkid is absent
       #community.general.filesystem:
-      #  fstype: ffs
+      #  fstype: ufs
       #  dev: /dev/vnd2
     when: ansible_system in ('NetBSD')
+
+##### FORMAT FS ON OPENBSD
+
+  ### TODO
 
   #- name: DEBUG - FAIL ON PURPOSE
   #  shell: 'false'
@@ -674,27 +678,6 @@
         - ephemeral_mount_record_2.stdout == ephemeral_mount_record_3.stdout
         - test_file_stat['stat']['exists']
         - ephemeral_mount_b_info is failed
-
-  - name: Remount FS initially mounted with ephemeral option
-    mount:
-      path: /tmp/myfs
-      state: remounted
-    when: ansible_system not in ('FreeBSD', 'NetBSD')
-
-  - name: Get fstab checksum after a remount of an ephemeral mount
-    stat:
-      path: '{{ ephemeral_fstab }}'
-    register: fstab_stat_after_remount
-
-  - name: Get mountinfo
-    shell: mount -v | awk '{print $3}' | grep '^/tmp/myfs$' | wc -l
-    register: check_mountinfo
-
-  - name: Assert that fstab is unchanged after a remount of an ephemeral mount
-    assert:
-      that:
-      - check_mountinfo.stdout|int == 1
-      - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_remount['stat']['checksum']
 
   - name: Unmount FS with state = unmounted
     mount:
