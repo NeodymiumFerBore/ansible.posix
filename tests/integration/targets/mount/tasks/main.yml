@@ -517,15 +517,46 @@
         mdconfig -a -t vnode -f /tmp/myfs_B.img -u /dev/md2
 
     - name: Format FS A on FreeBSD
+      ansible.builtin.shell: newfs /dev/md1
+      # Cannot use filesystem module on a fresh FreeBSD: blkid is absent
+      #community.general.filesystem:
+      #  fstype: ufs
+      #  dev: /dev/md1
+
+    - name: Format FS B on FreeBSD
+      ansible.builtin.shell: newfs /dev/md2
+      # Cannot use filesystem module on a fresh FreeBSD: blkid is absent
+      #community.general.filesystem:
+      #  fstype: ufs
+      #  dev: /dev/md2
+    when: ansible_system in ('FreeBSD')
+
+##### FORMAT FS ON OPENBSD
+
+  - name: Block to format FS on OpenBSD
+    block:
+    - name: Register OpenBSD block devices as fact
+      ansible.builtin.set_fact:
+        ephemeral_device_A: /dev/md1
+        ephemeral_device_B: /dev/md2
+        ephemeral_fstype: ufs
+        ephemeral_fstab: /etc/fstab
+
+    - name: Prepare block devices on OpenBSD
+      ansible.builtin.shell: |
+        mdconfig -a -t vnode -f /tmp/myfs_A.img -u /dev/md1
+        mdconfig -a -t vnode -f /tmp/myfs_B.img -u /dev/md2
+
+    - name: Format FS A on OpenBSD
       community.general.filesystem:
         fstype: ufs
         dev: /dev/md1
 
-    - name: Format FS B on FreeBSD
+    - name: Format FS B on OpenBSD
       community.general.filesystem:
         fstype: ufs
         dev: /dev/md2
-    when: ansible_system in ('FreeBSD')
+    when: ansible_system in ('OpenBSD')
 
   #- name: DEBUG - FAIL ON PURPOSE
   #  shell: 'false'
