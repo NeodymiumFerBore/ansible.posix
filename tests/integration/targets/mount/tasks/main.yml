@@ -641,6 +641,7 @@
     mount:
       path: /tmp/myfs
       state: remounted
+    when: ansible_system not in ('FreeBSD')
 
   - name: Get fstab checksum after a remount of an ephemeral mount
     stat:
@@ -683,39 +684,39 @@
       - not test_file_stat['stat']['exists']
       - fstab_stat_before_mount['stat']['checksum'] == fstab_stat_after_unmount['stat']['checksum']
 
-  # always:
-  #   - name: Unmount potential failure relicas
-  #     mount:
-  #       path: /tmp/myfs
-  #       state: unmounted
+  always:
+    - name: Unmount potential failure relicas
+      mount:
+        path: /tmp/myfs
+        state: unmounted
     
-  #   - name: Remove loop devices on SunOS/Solaris
-  #     ansible.builtin.shell: "lofiadm -d /dev/lofi/'{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
-  #     #with_list:
-  #     loop:
-  #       - '1'
-  #       - '2'
-  #     when: ansible_system in ('SunOS')
+    - name: Remove loop devices on SunOS/Solaris
+      ansible.builtin.shell: "lofiadm -d /dev/lofi/'{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
+      #with_list:
+      loop:
+        - '1'
+        - '2'
+      when: ansible_system in ('SunOS')
 
-  #   # DEBUG: variabilize loop device removal commands,
-  #   #        so we can merge these loops? (with block devices facts)
+    # DEBUG: variabilize loop device removal commands,
+    #        so we can merge these loops? (with block devices facts)
 
-  #   - name: Remove loop devices on FreeBSD
-  #     ansible.builtin.shell: "mdconfig -d -u '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
-  #     #with_list:
-  #     loop:
-  #       - '1'
-  #       - '2'
-  #     when: ansible_system in ('FreeBSD')
+    - name: Remove loop devices on FreeBSD
+      ansible.builtin.shell: "mdconfig -d -u '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
+      #with_list:
+      loop:
+        - '1'
+        - '2'
+      when: ansible_system in ('FreeBSD')
 
-  #   - name: Remove the test FS
-  #     file:
-  #       path: '{{ item }}'
-  #       state: absent
-  #     #with_list:
-  #     loop:
-  #       - /tmp/myfs_A.img
-  #       - /tmp/myfs_B.img
-  #       - /tmp/myfs
+    - name: Remove the test FS
+      file:
+        path: '{{ item }}'
+        state: absent
+      #with_list:
+      loop:
+        - /tmp/myfs_A.img
+        - /tmp/myfs_B.img
+        - /tmp/myfs
   when: ansible_system in ('Linux', 'SunOS', 'FreeBSD')
   
