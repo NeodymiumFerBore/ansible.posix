@@ -70,11 +70,11 @@ options:
         I(fstab) and does not trigger or require a mount.
       - C(ephemeral) only specifies that the device is to be mounted, without changing
         I(fstab). If it is already mounted, a remount will be triggered.
-        This will always return changed=True. If the mount point C(path)
-        has already a device mounted on, and its I(src) is different than C(src),
+        This will always return changed=True. If the mount point I(path)
+        has already a device mounted on, and its source is different than I(src),
         the module will fail to avoid unexpected unmount or mount point override.
         If the mount point is not present, the mount point will be created.
-        The value of C(fstab) is ignored.
+        The I(fstab) is completely ignored.
       - C(absent) specifies that the device mount's entry will be removed from
         I(fstab) and will also unmount the device and remove the mount
         point.
@@ -84,7 +84,9 @@ options:
         applied to the remount, but will not change I(fstab).  Additionally,
         if I(opts) is set, and the remount command fails, the module will
         error to prevent unexpected mount changes.  Try using C(mounted)
-        instead to work around this issue.
+        instead to work around this issue.  C(remounted) expects the mount point
+        to be present in the I(fstab). To remount a mount point not registered
+        in I(fstab), use C(ephemeral) instead, especially with BSD nodes.
     type: str
     required: true
     choices: [ absent, mounted, present, unmounted, remounted, ephemeral ]
@@ -547,12 +549,14 @@ def remount(module, args):
     out = err = ''
 
     try:
-        if platform.system().lower().endswith('bsd'):
+        if module.params['state'] != 'ephemeral' and platform.system().lower().endswith('bsd'):
             # Note: Forcing BSDs to do umount/mount due to BSD remount not
             # working as expected (suspect bug in the BSD mount command)
             # Interested contributor could rework this to use mount options on
             # the CLI instead of relying on fstab
             # https://github.com/ansible/ansible-modules-core/issues/5591
+            # Note: this does not affect ephemeral state as all options
+            # are set on the CLI and fstab is expected to be ignored.
             rc = 1
         else:
             rc, out, err = module.run_command(cmd)
