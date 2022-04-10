@@ -445,9 +445,7 @@
     ansible.builtin.package:
       name: e2fsprogs
       state: present
-    when: ansible_system in ('Linux')
-    #when: ansible_system not in ('SunOS')
-    #when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
+    when: ansible_system == 'Linux'
 
   - name: Create empty file A
     community.general.filesize:
@@ -479,7 +477,7 @@
         ephemeral_device_B: /tmp/myfs_B.img
         ephemeral_fstype: ext3
         ephemeral_fstab: /etc/fstab
-    when: ansible_system in ('Linux')
+    when: ansible_system == 'Linux'
 
 ##### FORMAT FS ON SOLARIS
 
@@ -501,7 +499,7 @@
         ephemeral_device_B: /dev/lofi/2
         ephemeral_fstype: ufs
         ephemeral_fstab: /etc/vfstab
-    when: ansible_system in ('SunOS')
+    when: ansible_system == 'SunOS'
   
 ##### FORMAT FS ON FREEBSD
 
@@ -521,17 +519,9 @@
 
     - name: Format FS A on FreeBSD
       ansible.builtin.shell: yes | newfs /dev/md1
-      # Cannot use filesystem module on a fresh FreeBSD: blkid is absent
-      #community.general.filesystem:
-      #  fstype: ufs
-      #  dev: /dev/md1
 
     - name: Format FS B on FreeBSD
       ansible.builtin.shell: yes | newfs /dev/md2
-      # Cannot use filesystem module on a fresh FreeBSD: blkid is absent
-      #community.general.filesystem:
-      #  fstype: ufs
-      #  dev: /dev/md2
     when: ansible_system in ('FreeBSD')
 
 ##### FORMAT FS ON NETBSD
@@ -552,30 +542,43 @@
 
     - name: Format FS A on NetBSD
       ansible.builtin.shell: /usr/bin/yes | /sbin/newfs /dev/vnd1
-      # Cannot use filesystem module on a fresh NetBSD: blkid is absent
-      #community.general.filesystem:
-      #  fstype: ufs
-      #  dev: /dev/vnd1
 
     - name: Format FS B on NetBSD
       ansible.builtin.shell: /usr/bin/yes | /sbin/newfs /dev/vnd2
-      # Cannot use filesystem module on a fresh NetBSD: blkid is absent
-      #community.general.filesystem:
-      #  fstype: ufs
-      #  dev: /dev/vnd2
     when: ansible_system in ('NetBSD')
 
 ##### FORMAT FS ON OPENBSD
 
-  ### TODO
+  - name: Block to format FS on OpenBSD
+    block:
+    - name: Register OpenBSD block devices as fact
+      ansible.builtin.set_fact:
+        ephemeral_device_A: /dev/vnd1c
+        ephemeral_device_B: /dev/vnd2c
+        ephemeral_fstype: ffs
+        ephemeral_fstab: /etc/fstab
 
-  #- name: DEBUG - FAIL ON PURPOSE
-  #  shell: 'false'
+    - name: Prepare block devices on OpenBSD
+      ansible.builtin.shell: |
+        vnconfig vnd1 /tmp/myfs_A.img
+        vnconfig vnd2 /tmp/myfs_B.img
+
+    - name: Format FS A on OpenBSD
+      ansible.builtin.shell: yes | newfs /dev/rvnd1c
+
+    - name: Format FS B on OpenBSD
+      ansible.builtin.shell: yes | newfs /dev/rvnd2c
+    when: ansible_system in ('OpenBSD')
 
 ##### TESTS
 
-  - name: DEBUG create fstab when it doesnt exist
-    shell: 'if ! stat {{ ephemeral_fstab }}; then touch {{ ephemeral_fstab }}; fi'
+  #- name: DEBUG create fstab when it doesnt exist
+  #  shell: 'if ! stat {{ ephemeral_fstab }}; then touch {{ ephemeral_fstab }}; fi'
+
+  - name: Create fstab if it does not exist
+    ansible.builtin.file:
+      path: "{{ ephemeral_fstab }}"
+      state: touch
 
   - name: Get checksum of /etc/fstab before mounting anything
     stat:
@@ -738,6 +741,14 @@
         - '/dev/vnd2'
       when: ansible_system in ('NetBSD')
 
+    - name: Remove loop devices on OpenBSD
+      ansible.builtin.shell: "vnconfig -u '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
+      #with_list:
+      loop:
+        - 'vnd1'
+        - 'vnd2'
+      when: ansible_system in ('OpenBSD')
+
     - name: Remove the test FS
       file:
         path: '{{ item }}'
@@ -747,5 +758,5 @@
         - /tmp/myfs_A.img
         - /tmp/myfs_B.img
         - /tmp/myfs
-  when: ansible_system in ('Linux', 'SunOS', 'FreeBSD', 'NetBSD')
+  when: ansible_system in ('Linux', 'SunOS', 'FreeBSD', 'NetBSD', 'OpenBSD')
   
