@@ -638,10 +638,11 @@ def is_bind_mounted(module, linux_mounts, dest, src=None, fstype=None):
     return is_mounted
 
 
-def _get_file_lines(module, file):
-    """Return raw mount information"""
+def get_linux_mounts(module, mntinfo_file="/proc/self/mountinfo"):
+    """Gather mount information"""
+
     try:
-        f = open(file)
+        f = open(mntinfo_file)
     except IOError:
         return
 
@@ -650,18 +651,7 @@ def _get_file_lines(module, file):
     try:
         f.close()
     except IOError:
-        module.fail_json(msg="Cannot close file %s" % file)
-
-    return lines
-
-
-def get_linux_mounts(module, mntinfo_file="/proc/self/mountinfo"):
-    """Gather mount information"""
-
-    lines = _get_file_lines(module, mntinfo_file)
-    # Keep same behavior than before
-    if lines is None:
-        return
+        module.fail_json(msg="Cannot close file %s" % mntinfo_file)
 
     mntinfo = {}
 
