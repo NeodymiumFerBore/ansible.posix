@@ -10,9 +10,7 @@
   ansible.builtin.package:
     name: e2fsprogs
     state: present
-  when: ansible_system in ('Linux')
-  #when: ansible_system not in ('SunOS')
-  #when: ansible_distribution not in ('NetBSD') and ansible_system not in ('SunOS')
+  when: ansible_system == 'Linux'
 
 - name: Create the mount point
   file:
@@ -428,8 +426,6 @@
 ######################################################################################################
 
 - name: Block to test ephemeral option
-  tags: ['ephemeral']
-  # Required for NetBSD for some reason
   environment:
     PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
   block:
@@ -457,6 +453,80 @@
       path: /tmp/myfs_B.img
       size: 20M
 
+  - name: Register facts on Linux
+    ansible.builtin.set_fact:
+      ephemeral_device_A: /tmp/myfs_A.img
+      ephemeral_device_B: /tmp/myfs_B.img
+      ephemeral_fstype: ext3
+      ephemeral_fstab: /etc/fstab
+    when: ansible_system == 'Linux'
+
+  - name: Register facts on Solaris/SunOS
+    ansible.builtin.set_fact:
+      ephemeral_device_A: /dev/lofi/1
+      ephemeral_device_B: /dev/lofi/2
+      ephemeral_create_loop_dev_cmd: >
+        lofiadm -a /tmp/myfs_A.img /dev/lofi/1 &&
+        lofiadm -a /tmp/myfs_B.img /dev/lofi/2
+      ephemeral_remove_loop_dev_cmd: >
+        lofiadm -d /dev/lofi/1 &&
+        lofiadm -d /dev/lofi/2 || true
+      ephemeral_fstype: ufs
+      ephemeral_fstab: /etc/vfstab
+    when: ansible_system == 'SunOS'
+
+  - name: Register facts on FreeBSD
+    ansible.builtin.set_fact:
+      ephemeral_device_A: /dev/md1
+      ephemeral_device_B: /dev/md2
+      ephemeral_create_loop_dev_cmd: >
+        mdconfig -a -t vnode -f /tmp/myfs_A.img -u /dev/md1 &&
+        mdconfig -a -t vnode -f /tmp/myfs_B.img -u /dev/md2
+      ephemeral_remove_loop_dev_cmd: >
+        mdconfig -d -u /dev/md1 &&
+        mdconfig -d -u /dev/md2
+      ephemeral_fstype: ufs
+      ephemeral_fstab: /etc/fstab
+    when: ansible_system == 'FreeBSD'
+
+  - name: Register facts on NetBSD
+    ansible.builtin.set_fact:
+      ephemeral_device_A: /dev/vnd1
+      ephemeral_device_B: /dev/vnd2
+      ephemeral_create_loop_dev_cmd: >
+        vnconfig /dev/vnd1 /tmp/myfs_A.img &&
+        vnconfig /dev/vnd2 /tmp/myfs_B.img
+      ephemeral_remove_loop_dev_cmd: >
+        vnconfig -u /dev/vnd1 &&
+        vnconfig -u /dev/vnd2
+      ephemeral_fstype: ufs
+      ephemeral_fstab: /etc/fstab
+    when: ansible_system == 'NetBSD'
+  
+  - name: Register format fs command on Non-Linux and Non-OpenBSD
+    ansible.builtin.set_fact:
+      ephemeral_format_fs_cmd: >
+        yes | newfs {{ ephemeral_device_A }} &&
+        yes | newfs {{ ephemeral_device_B }}
+    when: ansible_system in ('SunOS', 'FreeBSD', 'NetBSD')
+
+  - name: Register facts on OpenBSD
+    ansible.builtin.set_fact:
+      ephemeral_device_A: /dev/vnd1c
+      ephemeral_device_B: /dev/vnd2c
+      ephemeral_create_loop_dev_cmd: >
+        vnconfig vnd1 /tmp/myfs_A.img &&
+        vnconfig vnd2 /tmp/myfs_B.img
+      ephemeral_remove_loop_dev_cmd: >
+        vnconfig -u vnd1 &&
+        vnconfig -u vnd2
+      ephemeral_format_fs_cmd: >
+        yes | newfs /dev/rvnd1c &&
+        yes | newfs /dev/rvnd2c
+      ephemeral_fstype: ffs
+      ephemeral_fstab: /etc/fstab
+    when: ansible_system == 'OpenBSD'
+
 ##### FORMAT FS ON LINUX
 
   - name: Block to format FS on Linux
@@ -470,110 +540,19 @@
       community.general.filesystem:
         fstype: ext3
         dev: /tmp/myfs_B.img
-    
-    - name: Register Linux block devices as fact
-      ansible.builtin.set_fact:
-        ephemeral_device_A: /tmp/myfs_A.img
-        ephemeral_device_B: /tmp/myfs_B.img
-        ephemeral_fstype: ext3
-        ephemeral_fstab: /etc/fstab
     when: ansible_system == 'Linux'
 
-##### FORMAT FS ON SOLARIS
+##### FORMAT FS ON SOLARIS AND BSD
 
-  - name: Block to format FS on Solaris/SunOS
-    block:
-    - name: Format FS A on Solaris/SunOS
-      ansible.builtin.shell: >
-        lofiadm -a /tmp/myfs_A.img /dev/lofi/1 &&
-        yes | newfs /dev/lofi/1
-    
-    - name: Format FS B on Solaris/SunOS
-      ansible.builtin.shell: >
-        lofiadm -a /tmp/myfs_B.img /dev/lofi/2 &&
-        yes | newfs /dev/lofi/2
-    
-    - name: Register Solaris/SunOS block devices as fact
-      ansible.builtin.set_fact:
-        ephemeral_device_A: /dev/lofi/1
-        ephemeral_device_B: /dev/lofi/2
-        ephemeral_fstype: ufs
-        ephemeral_fstab: /etc/vfstab
-    when: ansible_system == 'SunOS'
+  - name: Create loop devices on Solaris and BSD
+    ansible.builtin.shell: "{{ ephemeral_create_loop_dev_cmd }}"
+    when: ephemeral_create_loop_dev_cmd is defined
   
-##### FORMAT FS ON FREEBSD
-
-  - name: Block to format FS on FreeBSD
-    block:
-    - name: Register FreeBSD block devices as fact
-      ansible.builtin.set_fact:
-        ephemeral_device_A: /dev/md1
-        ephemeral_device_B: /dev/md2
-        ephemeral_fstype: ufs
-        ephemeral_fstab: /etc/fstab
-
-    - name: Prepare block devices on FreeBSD
-      ansible.builtin.shell: |
-        mdconfig -a -t vnode -f /tmp/myfs_A.img -u /dev/md1
-        mdconfig -a -t vnode -f /tmp/myfs_B.img -u /dev/md2
-
-    - name: Format FS A on FreeBSD
-      ansible.builtin.shell: yes | newfs /dev/md1
-
-    - name: Format FS B on FreeBSD
-      ansible.builtin.shell: yes | newfs /dev/md2
-    when: ansible_system in ('FreeBSD')
-
-##### FORMAT FS ON NETBSD
-
-  - name: Block to format FS on NetBSD
-    block:
-    - name: Register NetBSD block devices as fact
-      ansible.builtin.set_fact:
-        ephemeral_device_A: /dev/vnd1
-        ephemeral_device_B: /dev/vnd2
-        ephemeral_fstype: ufs
-        ephemeral_fstab: /etc/fstab
-
-    - name: Prepare block devices on NetBSD
-      ansible.builtin.shell: |
-        /usr/sbin/vnconfig /dev/vnd1 /tmp/myfs_A.img
-        /usr/sbin/vnconfig /dev/vnd2 /tmp/myfs_B.img
-
-    - name: Format FS A on NetBSD
-      ansible.builtin.shell: /usr/bin/yes | /sbin/newfs /dev/vnd1
-
-    - name: Format FS B on NetBSD
-      ansible.builtin.shell: /usr/bin/yes | /sbin/newfs /dev/vnd2
-    when: ansible_system in ('NetBSD')
-
-##### FORMAT FS ON OPENBSD
-
-  - name: Block to format FS on OpenBSD
-    block:
-    - name: Register OpenBSD block devices as fact
-      ansible.builtin.set_fact:
-        ephemeral_device_A: /dev/vnd1c
-        ephemeral_device_B: /dev/vnd2c
-        ephemeral_fstype: ffs
-        ephemeral_fstab: /etc/fstab
-
-    - name: Prepare block devices on OpenBSD
-      ansible.builtin.shell: |
-        vnconfig vnd1 /tmp/myfs_A.img
-        vnconfig vnd2 /tmp/myfs_B.img
-
-    - name: Format FS A on OpenBSD
-      ansible.builtin.shell: yes | newfs /dev/rvnd1c
-
-    - name: Format FS B on OpenBSD
-      ansible.builtin.shell: yes | newfs /dev/rvnd2c
-    when: ansible_system in ('OpenBSD')
+  - name: Format FS A and B on Solaris and BSD
+    ansible.builtin.shell: "{{ ephemeral_format_fs_cmd }}"
+    when: ephemeral_format_fs_cmd is defined
 
 ##### TESTS
-
-  #- name: DEBUG create fstab when it doesnt exist
-  #  shell: 'if ! stat {{ ephemeral_fstab }}; then touch {{ ephemeral_fstab }}; fi'
 
   - name: Create fstab if it does not exist
     ansible.builtin.file:
@@ -633,12 +612,6 @@
     shell: mount -v | grep '/tmp/myfs'
     register: ephemeral_mount_record_2
     changed_when: no
-
-  - name: DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG DEBUG
-    debug:
-      msg:
-        - "{{ ephemeral_mount_record_1 }}"
-        - "{{ ephemeral_mount_record_2 }}"
 
   - name: Get mountinfo
     shell: mount -v | awk '{print $3}' | grep '^/tmp/myfs$' | wc -l
@@ -714,46 +687,14 @@
         path: /tmp/myfs
         state: unmounted
     
-    - name: Remove loop devices on SunOS/Solaris
-      ansible.builtin.shell: "lofiadm -d '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
-      #with_list:
-      loop:
-        - '/dev/lofi/1'
-        - '/dev/lofi/2'
-      when: ansible_system in ('SunOS')
-
-    # DEBUG: variabilize loop device removal commands,
-    #        so we can merge these loops? (with block devices facts)
-
-    - name: Remove loop devices on FreeBSD
-      ansible.builtin.shell: "mdconfig -d -u '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
-      #with_list:
-      loop:
-        - '/dev/md1'
-        - '/dev/md2'
-      when: ansible_system in ('FreeBSD')
-    
-    - name: Remove loop devices on NetBSD
-      ansible.builtin.shell: "/usr/sbin/vnconfig -u '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
-      #with_list:
-      loop:
-        - '/dev/vnd1'
-        - '/dev/vnd2'
-      when: ansible_system in ('NetBSD')
-
-    - name: Remove loop devices on OpenBSD
-      ansible.builtin.shell: "vnconfig -u '{{ item }}' || true" # || true to not return 1 when /dev/lofi/x does not exist
-      #with_list:
-      loop:
-        - 'vnd1'
-        - 'vnd2'
-      when: ansible_system in ('OpenBSD')
+    - name: Remove loop devices on Solaris and BSD
+      ansible.builtin.shell: "{{ ephemeral_remove_loop_dev_cmd }}"
+      when: ephemeral_remove_loop_dev_cmd is defined
 
     - name: Remove the test FS
       file:
         path: '{{ item }}'
         state: absent
-      #with_list:
       loop:
         - /tmp/myfs_A.img
         - /tmp/myfs_B.img
